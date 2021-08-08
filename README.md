@@ -1,6 +1,9 @@
-# Loguru: a lightweight and flexible C++ logging library.
+# Logurub: a lightweight and flexible C++ logging library with Boost
 
-[![Build status](https://ci.appveyor.com/api/projects/status/hret4rx3xakjs7j4?svg=true)](https://ci.appveyor.com/project/emilk/loguru)
+## Why create this project?
+Thanks to emilk for writing such a good log library, I like it very much. Most of my development environment is on windows, and a lot of code is developed on Visual Studio 2010. Unfortunately, Visual Studio 2010 does not support C++11 very well and loguru cannot be used, so I modified loguru and combined the Boost library to support C++98.
+
+The code is based on loguru's [v2.1.0](https://github.com/emilk/loguru/tree/v2.1.0).
 
 ## At a glance
 
