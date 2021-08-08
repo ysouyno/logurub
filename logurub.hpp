@@ -257,9 +257,9 @@ namespace loguru
 			_str = t._str;
 			t._str = nullptr;
 		}
-		Text(Text& t) = delete;
-		Text& operator=(Text& t) = delete;
-		void operator=(Text&& t) = delete;
+		Text(Text& t) {}
+		Text& operator=(Text& t) {}
+		void operator=(Text&& t) {}
 
 		const char* c_str() const { return _str; }
 		bool empty() const { return _str == nullptr || *_str == '\0'; }
@@ -294,7 +294,7 @@ namespace loguru
 	LOGURU_EXPORT
 	Text textprintf();
 
-	using Verbosity = int;
+	typedef int Verbosity;
 
 #undef FATAL
 #undef ERROR
@@ -347,6 +347,17 @@ namespace loguru
 		const char* indentation; // Just a bunch of spacing.
 		const char* prefix;      // Assertion failure info goes here (or "").
 		const char* message;     // User message goes here.
+
+		Message(Verbosity verbosity, const char *filename, unsigned line, const char *preamble,
+			const char *indentation, const char *prefix, const char *message)
+			: verbosity(verbosity)
+			, filename(filename)
+			, line(line)
+			, preamble(preamble)
+			, indentation(indentation)
+			, prefix(prefix)
+			, message(message)
+		{}
 	};
 
 	/* Everything with a verbosity equal or greater than g_stderr_verbosity will be
@@ -393,7 +404,7 @@ namespace loguru
 	{
 		// This allows you to use something else instead of "-v" via verbosity_flag.
 		// Set to nullptr to if you don't want Loguru to parse verbosity from the args.'
-		const char* verbosity_flag = "-v";
+		const char* verbosity_flag;
 
 		// loguru::init will set the name of the calling thread to this.
 		// If you don't want Loguru to set the name of the main thread,
@@ -401,12 +412,18 @@ namespace loguru
 		// NOTE: on SOME platforms loguru::init will only overwrite the thread name
 		// if a thread name has not already been set.
 		// To always set a thread name, use loguru::set_thread_name instead.
-		const char* main_thread_name = "main thread";
+		const char* main_thread_name;
 
 		// Make Loguru try to do unsafe but useful things,
 		// like printing a stack trace, when catching signals.
 		// This may lead to bad things like deadlocks in certain situations.
-		bool unsafe_signal_handler = true;
+		bool unsafe_signal_handler;
+
+		Options()
+			: verbosity_flag("-v")
+			, main_thread_name("main thread")
+			, unsafe_signal_handler(true)
+		{}
 	};
 
 	/*  Should be called from the main thread.
@@ -436,7 +453,7 @@ namespace loguru
 		You can you something other than the -v flag by setting the verbosity_flag option.
 	*/
 	LOGURU_EXPORT
-	void init(int& argc, char* argv[], const Options& options = {});
+	void init(int& argc, char* argv[], const Options& options = Options());
 
 	// Will call remove_all_callbacks(). After calling this, logging will still go to stderr.
 	// You generally don't need to call this.
@@ -591,7 +608,7 @@ namespace loguru
 		LogScopeRAII(Verbosity verbosity, const char* file, unsigned line, LOGURU_FORMAT_STRING_TYPE format, ...) LOGURU_PRINTF_LIKE(5, 6);
 		~LogScopeRAII();
 
-#if defined(_MSC_VER) && _MSC_VER > 1800
+#if defined(_MSC_VER) && _MSC_VER >= 1600 // > 1800
 		// older MSVC default move ctors close the scope on move. See
 		// issue #43
 		LogScopeRAII(LogScopeRAII&& other)
@@ -609,13 +626,13 @@ namespace loguru
 			}
 		}
 #else
-		LogScopeRAII(LogScopeRAII&&) = default;
+		LogScopeRAII(LogScopeRAII&&) {}
 #endif
 
 	private:
-		LogScopeRAII(const LogScopeRAII&) = delete;
-		LogScopeRAII& operator=(const LogScopeRAII&) = delete;
-		void operator=(LogScopeRAII&&) = delete;
+		LogScopeRAII(const LogScopeRAII&) {}
+		LogScopeRAII& operator=(const LogScopeRAII&) {}
+		void operator=(LogScopeRAII&&) {}
 
 		Verbosity   _verbosity;
 		const char* _file; // Set to null if we are disabled due to verbosity
@@ -764,10 +781,10 @@ namespace loguru
 	public:
 		EcEntryBase(const char* file, unsigned line, const char* descr);
 		~EcEntryBase();
-		EcEntryBase(const EcEntryBase&) = delete;
-		EcEntryBase(EcEntryBase&&) = delete;
-		EcEntryBase& operator=(const EcEntryBase&) = delete;
-		EcEntryBase& operator=(EcEntryBase&&) = delete;
+		EcEntryBase(const EcEntryBase&) {}
+		EcEntryBase(EcEntryBase&&) {}
+		EcEntryBase& operator=(const EcEntryBase&) {}
+		EcEntryBase& operator=(EcEntryBase&&) {}
 
 		virtual void print_value(StringStream& out_string_stream) const = 0;
 
@@ -784,7 +801,7 @@ namespace loguru
 	class EcEntryData : public EcEntryBase
 	{
 	public:
-		using Printer = Text(*)(T data);
+		typedef Text(*Printer)(T data);
 
 		EcEntryData(const char* file, unsigned line, const char* descr, T data, Printer&& printer)
 			: EcEntryBase(file, line, descr), _data(data), _printer(printer) {}
@@ -824,19 +841,19 @@ namespace loguru
 	// }
 
 	template <class T>
-	struct decay_char_array { using type = T; };
+	struct decay_char_array { typedef T type; };
 
 	template <unsigned long long  N>
-	struct decay_char_array<const char(&)[N]> { using type = const char*; };
+	struct decay_char_array<const char(&)[N]> { typedef const char* T; };
 
 	template <class T>
-	struct make_const_ptr { using type = T; };
+	struct make_const_ptr { typedef T type; };
 
 	template <class T>
-	struct make_const_ptr<T*> { using type = const T*; };
+	struct make_const_ptr<T*> { typedef const T* type; };
 
 	template <class T>
-	struct make_ec_type { using type = typename make_const_ptr<typename decay_char_array<T>::type>::type; };
+	struct make_ec_type { typedef typename make_const_ptr<typename decay_char_array<T>::type>::type type; };
 
 	/* 	A stack trace gives you the names of the function at the point of a crash.
 		With ERROR_CONTEXT, you can also get the values of select local variables.
@@ -878,7 +895,7 @@ namespace loguru
 				[=](){ return loguru::ec_to_text(data); }))
 */
 
-	using EcHandle = const EcEntryBase*;
+	typedef const EcEntryBase* EcHandle;
 
 	/*
 		Get a light-weight handle to the error context stack on this thread.
@@ -998,7 +1015,7 @@ namespace loguru
 #define LOG_SCOPE_F(verbosity_name, ...)                                                           \
 	VLOG_SCOPE_F(loguru::Verbosity_ ## verbosity_name, __VA_ARGS__)
 
-#define LOG_SCOPE_FUNCTION(verbosity_name) LOG_SCOPE_F(verbosity_name, __func__)
+#define LOG_SCOPE_FUNCTION(verbosity_name) LOG_SCOPE_F(verbosity_name, __FUNCTION__)
 
 // -----------------------------------------------
 // ABORT_F macro. Usage:  ABORT_F("Cause of error: %s", error_str);

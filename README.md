@@ -1,9 +1,16 @@
 # Logurub: a lightweight and flexible C++ logging library with Boost
 
+logurub = loguru + boost
+
 ## Why create this project?
-Thanks to emilk for writing such a good log library, I like it very much. Most of my development environment is on windows, and a lot of code is developed on Visual Studio 2010. Unfortunately, Visual Studio 2010 does not support C++11 very well and loguru cannot be used, so I modified loguru and combined the Boost library to support C++98.
+Thanks to emilk for writing such a good logging library, I like it very much. Most of my development environment is on Windows, and a lot of code is developed on Visual Studio 2010. Unfortunately, Visual Studio 2010 does not support C++11 very well and loguru cannot be used, so I modified loguru and combined the Boost library to support C++98.
 
 The code is based on loguru's [v2.1.0](https://github.com/emilk/loguru/tree/v2.1.0).
+
+## Demo
+I created a new Visual Studio 2010 test project named t_logurub, and the execution results are shown in the figure:
+
+![t_logurub's output](docs/t_logurub.png)
 
 ## At a glance
 

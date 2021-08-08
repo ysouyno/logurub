@@ -20,10 +20,11 @@
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable:4018)
+#pragma warning(disable:4996)
 #endif // _MSC_VER
 #endif
 
-#include "loguru.hpp"
+#include "logurub.hpp"
 
 #ifndef LOGURU_HAS_BEEN_IMPLEMENTED
 #define LOGURU_HAS_BEEN_IMPLEMENTED
@@ -34,17 +35,19 @@
 #undef max
 
 #include <algorithm>
-#include <atomic>
-#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <mutex>
 #include <regex>
 #include <string>
-#include <thread>
 #include <vector>
+
+#include <boost/chrono.hpp>
+#include <boost/thread/recursive_mutex.hpp>
+#include <boost/atomic.hpp>
+#include <boost/thread.hpp>
+#include <boost/foreach.hpp>
 
 #ifdef _WIN32
 	#include <direct.h>
@@ -132,7 +135,7 @@
 
 namespace loguru
 {
-	using namespace std::chrono;
+	using namespace boost::chrono;
 
 #if LOGURU_WITH_FILEABS
 	struct FileAbs
@@ -158,12 +161,23 @@ namespace loguru
 		close_handler_t close;
 		flush_handler_t flush;
 		unsigned        indentation;
+
+		Callback(std::string id, log_handler_t callback, void *user_data, Verbosity verbosity,
+			close_handler_t close, flush_handler_t flush, unsigned indentation)
+			: id(id)
+			, callback(callback)
+			, user_data(user_data)
+			, verbosity(verbosity)
+			, close(close)
+			, flush(flush)
+			, indentation(indentation)
+		{}
 	};
 
-	using CallbackVec = std::vector<Callback>;
+	typedef std::vector<Callback> CallbackVec;
 
-	using StringPair     = std::pair<std::string, std::string>;
-	using StringPairList = std::vector<StringPair>;
+	typedef std::pair<std::string, std::string> StringPair;
+	typedef std::vector<StringPair> StringPairList;
 
 	const auto s_start_time = steady_clock::now();
 
@@ -183,24 +197,25 @@ namespace loguru
 	bool      g_preamble_verbose  = true;
 	bool      g_preamble_pipe     = true;
 
-	static std::recursive_mutex  s_mutex;
-	static Verbosity             s_max_out_verbosity = Verbosity_OFF;
-	static std::string           s_argv0_filename;
-	static std::string           s_arguments;
-	static char                  s_current_dir[PATH_MAX];
-	static CallbackVec           s_callbacks;
-	static fatal_handler_t       s_fatal_handler   = nullptr;
-	static verbosity_to_name_t   s_verbosity_to_name_callback = nullptr;
-	static name_to_verbosity_t   s_name_to_verbosity_callback = nullptr;
-	static StringPairList        s_user_stack_cleanups;
-	static bool                  s_strip_file_path = true;
-	static std::atomic<unsigned> s_stderr_indentation { 0 };
+	static boost::recursive_mutex  s_mutex;
+	static Verbosity               s_max_out_verbosity = Verbosity_OFF;
+	static std::string             s_argv0_filename;
+	static std::string             s_arguments;
+	static char                    s_current_dir[PATH_MAX];
+	static CallbackVec             s_callbacks;
+	static fatal_handler_t         s_fatal_handler   = nullptr;
+	static verbosity_to_name_t     s_verbosity_to_name_callback = nullptr;
+	static name_to_verbosity_t     s_name_to_verbosity_callback = nullptr;
+	static StringPairList          s_user_stack_cleanups;
+	static bool                    s_strip_file_path = true;
+	static boost::atomic<unsigned> s_stderr_indentation ( 0 );
 
 	// For periodic flushing:
-	static std::thread* s_flush_thread   = nullptr;
-	static bool         s_needs_flushing = false;
+	static boost::thread* s_flush_thread   = nullptr;
+	static bool           s_needs_flushing = false;
 
-	static const bool s_terminal_has_color = [](){
+	bool lambda_terminal_has_color()
+	{
 		#ifdef _WIN32
 			#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 			#define ENABLE_VIRTUAL_TERMINAL_PROCESSING  0x0004
@@ -231,7 +246,9 @@ namespace loguru
 				return false;
 			}
 		#endif
-	}();
+	}
+
+	static const bool s_terminal_has_color = lambda_terminal_has_color();
 
 	static void print_preamble_header(char* out_buff, size_t out_buff_size);
 
@@ -503,7 +520,7 @@ namespace loguru
 
 	static void escape(std::string& out, const std::string& str)
 	{
-		for (char c : str) {
+		BOOST_FOREACH (char c, str) {
 			/**/ if (c == '\a') { out += "\\a";  }
 			else if (c == '\b') { out += "\\b";  }
 			else if (c == '\f') { out += "\\f";  }
@@ -632,7 +649,7 @@ namespace loguru
 		time_t sec_since_epoch = time_t(ms_since_epoch / 1000);
 		tm time_info;
 		localtime_r(&sec_since_epoch, &time_info);
-		snprintf(buff, buff_size, "%04d%02d%02d_%02d%02d%02d.%03lld",
+		_snprintf(buff, buff_size, "%04d%02d%02d_%02d%02d%02d.%03lld",
 			1900 + time_info.tm_year, 1 + time_info.tm_mon, time_info.tm_mday,
 			time_info.tm_hour, time_info.tm_min, time_info.tm_sec, ms_since_epoch % 1000);
 	}
@@ -668,9 +685,9 @@ namespace loguru
 	void suggest_log_path(const char* prefix, char* buff, unsigned buff_size)
 	{
 		if (prefix[0] == '~') {
-			snprintf(buff, buff_size - 1, "%s%s", home_dir(), prefix + 1);
+			_snprintf(buff, buff_size - 1, "%s%s", home_dir(), prefix + 1);
 		} else {
-			snprintf(buff, buff_size - 1, "%s", prefix);
+			_snprintf(buff, buff_size - 1, "%s", prefix);
 		}
 
 		// Check for terminating /
@@ -723,9 +740,9 @@ namespace loguru
 	{
 		char path[PATH_MAX];
 		if (path_in[0] == '~') {
-			snprintf(path, sizeof(path) - 1, "%s%s", home_dir(), path_in + 1);
+			_snprintf(path, sizeof(path) - 1, "%s%s", home_dir(), path_in + 1);
 		} else {
-			snprintf(path, sizeof(path) - 1, "%s", path_in);
+			_snprintf(path, sizeof(path) - 1, "%s", path_in);
 		}
 
 		if (!create_directories(path)) {
@@ -805,7 +822,7 @@ namespace loguru
 	static void on_callback_change()
 	{
 		s_max_out_verbosity = Verbosity_OFF;
-		for (const auto& callback : s_callbacks) {
+		BOOST_FOREACH (const auto& callback, s_callbacks) {
 			s_max_out_verbosity = std::max(s_max_out_verbosity, callback.verbosity);
 		}
 	}
@@ -818,8 +835,8 @@ namespace loguru
 		close_handler_t on_close,
 		flush_handler_t on_flush)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
-		s_callbacks.push_back(Callback{id, callback, user_data, verbosity, on_close, on_flush, 0});
+		boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
+		s_callbacks.push_back(Callback(id, callback, user_data, verbosity, on_close, on_flush, 0));
 		on_callback_change();
 	}
 
@@ -876,7 +893,7 @@ namespace loguru
 
 	bool remove_callback(const char* id)
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
 		auto it = std::find_if(begin(s_callbacks), end(s_callbacks), [&](const Callback& c) { return c.id == id; });
 		if (it != s_callbacks.end()) {
 			if (it->close) { it->close(it->user_data); }
@@ -891,8 +908,8 @@ namespace loguru
 
 	void remove_all_callbacks()
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
-		for (auto& callback : s_callbacks) {
+		boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
+		BOOST_FOREACH (auto& callback, s_callbacks) {
 			if (callback.close) {
 				callback.close(callback.user_data);
 			}
@@ -986,7 +1003,7 @@ namespace loguru
 		}
 #elif LOGURU_WINTHREADS
 		if (const char* name = get_thread_name_win32()) {
-			snprintf(buffer, (size_t)length, "%s", name);
+			_snprintf(buffer, (size_t)length, "%s", name);
 		} else {
 			buffer[0] = 0;
 		}
@@ -1137,25 +1154,25 @@ namespace loguru
 		out_buff[0] = '\0';
 		long pos = 0;
 		if (g_preamble_date && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "date       ");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "date       ");
 		}
 		if (g_preamble_time && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "time         ");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "time         ");
 		}
 		if (g_preamble_uptime && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "( uptime  ) ");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "( uptime  ) ");
 		}
 		if (g_preamble_thread && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "[%-*s]", LOGURU_THREADNAME_WIDTH, " thread name/id");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "[%-*s]", LOGURU_THREADNAME_WIDTH, " thread name/id");
 		}
 		if (g_preamble_file && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "%*s:line  ", LOGURU_FILENAME_WIDTH, "file");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "%*s:line  ", LOGURU_FILENAME_WIDTH, "file");
 		}
 		if (g_preamble_verbose && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "   v");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "   v");
 		}
 		if (g_preamble_pipe && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "| ");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "| ");
 		}
 	}
 
@@ -1182,41 +1199,41 @@ namespace loguru
 		char level_buff[6];
 		const char* custom_level_name = get_verbosity_name(verbosity);
 		if (custom_level_name) {
-			snprintf(level_buff, sizeof(level_buff) - 1, "%s", custom_level_name);
+			_snprintf(level_buff, sizeof(level_buff) - 1, "%s", custom_level_name);
 		} else {
-			snprintf(level_buff, sizeof(level_buff) - 1, "% 4d", verbosity);
+			_snprintf(level_buff, sizeof(level_buff) - 1, "% 4d", verbosity);
 		}
 
 		long pos = 0;
 
 		if (g_preamble_date && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "%04d-%02d-%02d ",
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "%04d-%02d-%02d ",
 				             1900 + time_info.tm_year, 1 + time_info.tm_mon, time_info.tm_mday);
 		}
 		if (g_preamble_time && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "%02d:%02d:%02d.%03lld ",
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "%02d:%02d:%02d.%03lld ",
 			               time_info.tm_hour, time_info.tm_min, time_info.tm_sec, ms_since_epoch % 1000);
 		}
 		if (g_preamble_uptime && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "(%8.3fs) ",
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "(%8.3fs) ",
 			               uptime_sec);
 		}
 		if (g_preamble_thread && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "[%-*s]",
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "[%-*s]",
 			               LOGURU_THREADNAME_WIDTH, thread_name);
 		}
 		if (g_preamble_file && pos < out_buff_size) {
 			char shortened_filename[LOGURU_FILENAME_WIDTH + 1];
-			snprintf(shortened_filename, LOGURU_FILENAME_WIDTH + 1, "%s", file);
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "%*s:%-5u ",
+			_snprintf(shortened_filename, LOGURU_FILENAME_WIDTH + 1, "%s", file);
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "%*s:%-5u ",
 			               LOGURU_FILENAME_WIDTH, shortened_filename, line);
 		}
 		if (g_preamble_verbose && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "%4s",
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "%4s",
 			               level_buff);
 		}
 		if (g_preamble_pipe && pos < out_buff_size) {
-			pos += snprintf(out_buff + pos, out_buff_size - pos, "| ");
+			pos += _snprintf(out_buff + pos, out_buff_size - pos, "| ");
 		}
 	}
 
@@ -1224,7 +1241,7 @@ namespace loguru
 	static void log_message(int stack_trace_skip, Message& message, bool with_indentation, bool abort_if_fatal)
 	{
 		const auto verbosity = message.verbosity;
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
 
 		if (message.verbosity == Verbosity_FATAL) {
 			auto st = loguru::stacktrace(stack_trace_skip + 2);
@@ -1276,7 +1293,7 @@ namespace loguru
 			}
 		}
 
-		for (auto& p : s_callbacks) {
+		BOOST_FOREACH (auto& p, s_callbacks) {
 			if (verbosity <= p.verbosity) {
 				if (with_indentation) {
 					message.indentation = indentation(p.indentation);
@@ -1291,12 +1308,12 @@ namespace loguru
 		}
 
 		if (g_flush_interval_ms > 0 && !s_flush_thread) {
-			s_flush_thread = new std::thread([](){
+			s_flush_thread = new boost::thread([](){
 				for (;;) {
 					if (s_needs_flushing) {
 						flush();
 					}
-					std::this_thread::sleep_for(std::chrono::milliseconds(g_flush_interval_ms));
+					boost::this_thread::sleep_for(boost::chrono::milliseconds(g_flush_interval_ms));
 				}
 			});
 		}
@@ -1326,7 +1343,7 @@ namespace loguru
 	{
 		char preamble_buff[LOGURU_PREAMBLE_WIDTH];
 		print_preamble(preamble_buff, sizeof(preamble_buff), verbosity, file, line);
-		auto message = Message{verbosity, file, line, preamble_buff, "", prefix, buff};
+		auto message = Message(verbosity, file, line, preamble_buff, "", prefix, buff);
 		log_message(stack_trace_skip + 1, message, true, true);
 	}
 
@@ -1358,7 +1375,7 @@ namespace loguru
 		va_list vlist;
 		va_start(vlist, format);
 		auto buff = vtextprintf(format, vlist);
-		auto message = Message{verbosity, file, line, "", "", "", buff.c_str()};
+		auto message = Message(verbosity, file, line, "", "", "", buff.c_str());
 		log_message(1, message, false, true);
 		va_end(vlist);
 	}
@@ -1366,9 +1383,9 @@ namespace loguru
 
 	void flush()
 	{
-		std::lock_guard<std::recursive_mutex> lock(s_mutex);
+		boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
 		fflush(stderr);
-		for (const auto& callback : s_callbacks)
+		BOOST_FOREACH (const auto& callback, s_callbacks)
 		{
 			if (callback.flush) {
 				callback.flush(callback.user_data);
@@ -1381,7 +1398,7 @@ namespace loguru
 		: _verbosity(verbosity), _file(file), _line(line)
 	{
 		if (verbosity <= current_verbosity_cutoff()) {
-			std::lock_guard<std::recursive_mutex> lock(s_mutex);
+			boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
 			_indent_stderr = (verbosity <= g_stderr_verbosity);
 			_start_time_ns = now_ns();
 			va_list vlist;
@@ -1394,7 +1411,7 @@ namespace loguru
 				++s_stderr_indentation;
 			}
 
-			for (auto& p : s_callbacks) {
+			BOOST_FOREACH (auto& p, s_callbacks) {
 				if (verbosity <= p.verbosity) {
 					++p.indentation;
 				}
@@ -1407,11 +1424,11 @@ namespace loguru
 	LogScopeRAII::~LogScopeRAII()
 	{
 		if (_file) {
-			std::lock_guard<std::recursive_mutex> lock(s_mutex);
+			boost::lock_guard<boost::recursive_mutex> lock(s_mutex);
 			if (_indent_stderr && s_stderr_indentation > 0) {
 				--s_stderr_indentation;
 			}
-			for (auto& p : s_callbacks) {
+			BOOST_FOREACH (auto& p, s_callbacks) {
 				// Note: Callback indentation cannot change!
 				if (_verbosity <= p.verbosity) {
 					// in unlikely case this callback is new
@@ -1529,13 +1546,13 @@ namespace loguru
 
 	// ----------------------------------------------------------------------------
 
-	using ECPtr = EcEntryBase*;
+	typedef EcEntryBase* ECPtr;
 
 #if defined(_WIN32) || (defined(__APPLE__) && !TARGET_OS_IPHONE)
 	#ifdef __APPLE__
 		#define LOGURU_THREAD_LOCAL __thread
 	#else
-		#define LOGURU_THREAD_LOCAL thread_local
+		#define LOGURU_THREAD_LOCAL __declspec(thread)
 	#endif
 	static LOGURU_THREAD_LOCAL ECPtr thread_ec_ptr = nullptr;
 
@@ -1593,7 +1610,7 @@ namespace loguru
 		StringStream result;
 		if (!stack.empty()) {
 			result.str += "------------------------------------------------\n";
-			for (auto entry : stack) {
+			BOOST_FOREACH (auto entry, stack) {
 				const auto description = std::string(entry->_descr) + ":";
 #if LOGURU_USE_FMTLIB
 				auto prefix = textprintf("[ErrorContext] {.{}s}:{:-5u} {:-20s} ",
@@ -1631,7 +1648,7 @@ namespace loguru
 		// Add quotes around the string to make it obvious where it begin and ends.
 		// This is great for detecting erroneous leading or trailing spaces in e.g. an identifier.
 		auto str = "\"" + std::string(value) + "\"";
-		return Text{STRDUP(str.c_str())};
+		return Text(STRDUP(str.c_str()));
 	}
 
 	Text ec_to_text(char c)
@@ -1669,17 +1686,18 @@ namespace loguru
 
 		str += "'";
 
-		return Text{STRDUP(str.c_str())};
+		return Text(STRDUP(str.c_str()));
 	}
 
 	#define DEFINE_EC(Type)                        \
 		Text ec_to_text(Type value)                \
 		{                                          \
 			auto str = std::to_string(value);      \
-			return Text{STRDUP(str.c_str())};      \
+			return Text(STRDUP(str.c_str()));      \
 		}
 
-	DEFINE_EC(int)
+	// TODO: error C2668: 'std::to_string' : ambiguous call to overloaded function in VS2010
+	/*DEFINE_EC(int)
 	DEFINE_EC(unsigned int)
 	DEFINE_EC(long)
 	DEFINE_EC(unsigned long)
@@ -1687,7 +1705,7 @@ namespace loguru
 	DEFINE_EC(unsigned long long)
 	DEFINE_EC(float)
 	DEFINE_EC(double)
-	DEFINE_EC(long double)
+	DEFINE_EC(long double)*/
 
 	#undef DEFINE_EC
 
